@@ -1,0 +1,29 @@
+{
+    "Name": "Jixie.A-Brawl",
+    "Description": "Replaces the normal A-Wall ability with a handheld amped shield carried in front of the player. Step 1: shield deployment and carry.",
+    "Version": "0.2.0",
+    "LoadPriority": 1,
+
+    "ConVars": [
+        {
+            "Name": "a_brawl_shield_health",
+            "DefaultValue": "400",
+            "Description": "HP of the held A-Wall shield. 0 = use default (850)."
+        },
+        {
+            "Name": "a_brawl_shield_forward_offset",
+            "DefaultValue": "30",
+            "Description": "How far in front of the player the shield hovers (units)."
+        },
+        {
+            "Name": "a_brawl_shield_vertical_offset",
+            "DefaultValue": "0",
+            "Description": "Vertical offset of the held shield (positive = up)."
+        },
+        {
+            "Name": "a_brawl_shield_duration",
+            "DefaultValue": "10",
+            "Description": "Duration of held shield in seconds. 0 = infinite."
+        }
+    ]
+}
