@@ -2,17 +2,31 @@ untyped
 
 // ================================================================================================
 //  JIXIE'S A-BRAWL MOD  —  mp_weapon_deployable_cover.nut
-//  Step 1: Handheld amped shield that is carried in front of the player.
 //
-//  HOW IT WORKS (big picture):
-//    • When the player activates the A-Wall offhand, instead of throwing anything we
-//      immediately spawn an amped-wall prop and pin it in front of them every frame.
-//    • The shield blocks damage from the forward hemisphere (any hit whose incoming
-//      direction has a positive dot product with the player's facing vector).
-//    • OnWeaponAttemptOffhandSwitch returns true so the animation plays and we can
-//      hook into it; the actual "throw" is intercepted and replaced with shield logic.
-//    • The shield is destroyed when the player: re-presses the ability, dies, or it
-//      runs out of HP.
+//  ARCHITECTURE OVERVIEW
+//  ─────────────────────
+//  The "shield" is made of two distinct layers:
+//
+//    1. COLLISION ENTITY  ("wall")
+//       An invisible prop_dynamic using the stock amped-wall model.
+//       It exists purely to receive damage callbacks and to provide a
+//       world-space anchor for the particle FX.  Rendered invisible via Hide().
+//
+//    2. VISUAL LAYER  ("domeFX")
+//       A particle effect started on the collision entity using
+//       StartParticleEffectOnEntity(..., FX_PATTACH_ABSORIGIN_FOLLOW, -1).
+//       Control Point 1 carries <scale, scale, scale> so the dome can be
+//       resized at runtime via the a_brawl_dome_scale ConVar.
+//
+//  Both layers are repositioned every frame by HeldShield_PositionThread.
+//
+//  LIFECYCLE
+//  ─────────
+//    Activate  → OnWeaponTossReleaseAnimEvent → CreateHeldAmpedWall
+//    Re-press  → OnWeaponAttemptOffhandSwitch → DestroyHeldAmpedWall → false
+//    HP = 0    → OnAmpedWallDamaged           → DestroyHeldAmpedWall
+//    Death     → lifetime thread OnThreadEnd  → DestroyHeldAmpedWall
+//    Duration  → lifetime thread wait         → DestroyHeldAmpedWall
 // ================================================================================================
 
 global function MpWeaponDeployableCover_Init
@@ -29,43 +43,75 @@ global function GetAmpedWallsActiveCountForPlayer
 global function HeldShield_ShouldBlockDamage
 #endif
 
-// ── Asset names ────────────────────────────────────────────────────────────────
-const DEPLOYABLE_SHIELD_FX       = $"P_pilot_cover_shield"
-const DEPLOYABLE_SHIELD_FX_AMPED = $"P_pilot_amped_shield"
-const DEPLOYABLE_SHIELD_MODEL    = $"models/fx/pilot_shield_wall_amped.mdl"
+// ── Asset identifiers ─────────────────────────────────────────────────────────
+//
+//  DEPLOYABLE_SHIELD_MODEL is used for the invisible collision entity.
+//  The engine needs a valid model on any prop_dynamic, but we Hide() it
+//  so only the particle FX is visible.
+//
+//  DOME_FX_NAME must match the `particle "..."` name in awall_dome_fx.pdef exactly.
+//
+// const DEPLOYABLE_SHIELD_MODEL = $"models/fx/pilot_shield_wall_amped.mdl"
+const DOME_SHIELD_MODEL = $"models/fx/xo_shield.mdl"
+const asset DOME_FX_NAME = $"awall_dome_fx"
 
-// ── Fallback constants (overridden by ConVars at runtime) ──────────────────────
-const int   DEPLOYABLE_SHIELD_HEALTH    = 850
-const float SHIELD_FORWARD_OFFSET       = 40.0  // units in front of player origin
-const float SHIELD_VERTICAL_OFFSET      = 0.0   // vertical tweak
-const float DEPLOYABLE_SHIELD_DURATION  = 10.0  // seconds 
+// Stock A-Wall sounds / break FX reused for now.
+const SHIELD_BREAK_FX  = $"P_pilot_amped_shield_break"
+const SHIELD_START_SFX = "Hardcover_Shield_Start_3P"
+const SHIELD_END_SFX   = "Hardcover_Shield_End_3P"
+const SHIELD_HIT_SFX = "Hardcover_Shield_Hit_3P"
 
-// ── File-scope state ───────────────────────────────────────────────────────────
+// ── Hardcoded fallbacks (ConVars override at runtime) ─────────────────────────
+const int   DEFAULT_SHIELD_HEALTH   = 850
+const float DEFAULT_FORWARD_OFFSET  = 50.0
+const float DEFAULT_VERTICAL_OFFSET = 0.0
+const float DEFAULT_DOME_SCALE      = 0.35
+const vector AWALL_ORANGE = <1.0, 0.45, 0.0>
+
+// ── File-scope state ──────────────────────────────────────────────────────────
 struct
 {
-    // Tracks the active shield entity per player so we can destroy it cleanly.
+    // player → active wall collision entity
     table< entity, entity > playerShieldTable
 
-    int ampedFXIndex
+    // wall entity → its running dome FX entity (for clean teardown)
+    table< entity, array<entity> > wallFXTable
+
+    // int precachedDomeFX
+    int bubbleFXIndex
+
+    bool initHasBeenCalledOnce = false
 } file
 
+void function EnsureShieldFXPrecached()
+{
+    #if SERVER
+    if ( file.initHasBeenCalledOnce )
+        return
+
+    PrecacheModel( DOME_SHIELD_MODEL )
+    file.bubbleFXIndex = PrecacheParticleSystem( DOME_FX_NAME )
+    print( "[A-Brawl] bubbleFXIndex = " + string( file.bubbleFXIndex ) )
+
+    file.initHasBeenCalledOnce = true
+    #endif
+}
 
 // ================================================================================================
 //  INIT
 // ================================================================================================
 function MpWeaponDeployableCover_Init()
 {
-    PrecacheParticleSystem( DEPLOYABLE_SHIELD_FX )
-    file.ampedFXIndex = PrecacheParticleSystem( DEPLOYABLE_SHIELD_FX_AMPED )
-    PrecacheModel( DEPLOYABLE_SHIELD_MODEL )
+    PrecacheModel( DOME_SHIELD_MODEL )
+    file.bubbleFXIndex = PrecacheParticleSystem( DOME_FX_NAME )
+    // print( "[A-Brawl] precached dome FX = " + string( file.precachedDomeFX ) )
+    print( "[A-Brawl] bubbleFXIndex = " + string( file.bubbleFXIndex ) )
 }
-
 
 // ================================================================================================
 //  OFFHAND SWITCH GATE
-//  Called every time the game considers letting the player bring up the offhand.
-//  Return true  → allow the switch (plays deploy animation, leads to TossRelease).
-//  Return false → block it (e.g. while shield is already active so second-press destroys).
+//  No shield active  -> return true  (let the deploy animation play)
+//  Shield active     -> destroy it, return false (silently eat the button press)
 // ================================================================================================
 bool function OnWeaponAttemptOffhandSwitch_weapon_deployable_cover( entity weapon )
 {
@@ -74,17 +120,15 @@ bool function OnWeaponAttemptOffhandSwitch_weapon_deployable_cover( entity weapo
     if ( !IsValid( player ) )
         return false
 
-    // If a shield is already active for this player, destroy it and block the switch
-    // so we don't start a fresh deploy animation.
     if ( player in file.playerShieldTable )
     {
         entity existing = file.playerShieldTable[ player ]
         if ( IsValid( existing ) )
         {
             DestroyHeldAmpedWall( player )
-            return false  // eat the press; shield is now gone
+            return false
         }
-        // Stale entry – clean it up and let a new shield spawn.
+        // Stale entry from a shield that was already broken — clean up and allow redeploy.
         delete file.playerShieldTable[ player ]
     }
     #endif
@@ -95,19 +139,17 @@ bool function OnWeaponAttemptOffhandSwitch_weapon_deployable_cover( entity weapo
 
 // ================================================================================================
 //  TOSS PREP
-//  Fires when the deploy animation starts.  We use it to play the deploy sound.
 // ================================================================================================
 void function OnWeaponTossPrep_weapon_deployable_cover( entity weapon, WeaponTossPrepParams prepParams )
 {
-    // Optional: play a sound here so the activation feels snappy.
-    // weapon.EmitWeaponSound_1p3p( "Hardcover_Shield_Start_3P", "Hardcover_Shield_Start_3P" )
+    // Empty — add a "readying" sound here if desired.
 }
 
 
 // ================================================================================================
 //  TOSS RELEASE ANIM EVENT
-//  Fires at the key frame of the deploy animation.
-//  Instead of throwing a deployable, we spawn the held shield here.
+//  Intercepts the throw keyframe and spawns the held shield instead.
+//  Returns 0 → no ammo consumed.
 // ================================================================================================
 var function OnWeaponTossReleaseAnimEvent_weapon_deployable_cover( entity weapon, WeaponPrimaryAttackParams attackParams )
 {
@@ -117,7 +159,6 @@ var function OnWeaponTossReleaseAnimEvent_weapon_deployable_cover( entity weapon
         CreateHeldAmpedWall( owner )
     #endif
 
-    // Return 0 so no ammo is consumed (we manage ammo / cooldown manually).
     return 0
 }
 
@@ -129,132 +170,238 @@ var function OnWeaponTossReleaseAnimEvent_weapon_deployable_cover( entity weapon
 
 void function CreateHeldAmpedWall( entity player )
 {
-    
+    // custom fake init function because the init function was not calling for some reason
+    EnsureShieldFXPrecached()
+
+    // if ( !file.initHasBeenCalledOnce )
+    // {
+    //     PrecacheModel( DOME_SHIELD_MODEL )
+    //     file.bubbleFXIndex = PrecacheParticleSystem( DOME_FX_NAME )
+    //     print( "[A-Brawl] bubbleFXIndex = " + string( file.bubbleFXIndex ) )
+
+    //     file.initHasBeenCalledOnce = true
+    // }
+
     if ( !IsValid( player ) )
         return
 
+    // Safety: destroy any pre-existing shield.
     if ( player in file.playerShieldTable )
     {
-        entity old = file.playerShieldTable[player]
+        entity old = file.playerShieldTable[ player ]
         if ( IsValid( old ) )
-            old.Destroy()
+            DestroyHeldAmpedWall( player )
     }
 
-    int health = GetConVarInt( "a_brawl_shield_health" )
-    if ( health <= 0 )
-        health = DEPLOYABLE_SHIELD_HEALTH
+    // ── ConVar reads ──────────────────────────────────────────────────────────
+    int   health    = GetConVarInt( "a_brawl_shield_health" )
+    if ( health <= 0 ) health = DEFAULT_SHIELD_HEALTH
 
     float fwdOffset = GetConVarFloat( "a_brawl_shield_forward_offset" )
     float upOffset  = GetConVarFloat( "a_brawl_shield_vertical_offset" )
     float duration  = GetConVarFloat( "a_brawl_shield_duration" )
+    float domeScale = GetConVarFloat( "a_brawl_dome_scale" )
 
-    entity wall = CreatePropDynamic(
-        DEPLOYABLE_SHIELD_MODEL,
-        player.GetOrigin(),
-        player.EyeAngles(),
-        SOLID_VPHYSICS
-    )
+    // a_brawl_dome_scale sets CP1 on the dome particle.
+    // 1.0 → native OBJ size (radius ≈ 50 units).
+    // 1.5 → 75 unit radius, etc.
+    if ( domeScale <= 0.0 ) domeScale = DEFAULT_DOME_SCALE
 
-    if ( !IsValid( wall ) )
-    {
-        print( "[A-Brawl] ERROR: Failed to spawn shield prop." )
-        return
-    }
+    // ── Spawn collision entity ────────────────────────────────────────────────
+    //
+    //  Mirroring _bubble_shield.gnut: use CreateEntity + SetValueForModelKey +
+    //  DispatchSpawn rather than CreatePropDynamic.  This is the pattern Respawn
+    //  uses for the production bubble shield and is more stable for this model.
+    //
+    entity wall = CreateEntity( "prop_dynamic" )
+    wall.SetValueForModelKey( DOME_SHIELD_MODEL )
 
-    wall.kv.solid = 0
+    // Solid enough for bullet traces, but NOT players — same flags as the original.
+    wall.kv.solid          = SOLID_VPHYSICS
+    wall.kv.CollisionGroup = TRACE_COLLISION_GROUP_BLOCK_WEAPONS_AND_PHYSICS
+
+    // Start at the player's position; the positioning thread will take over.
+    wall.SetOrigin( player.GetOrigin() )
+
+    // ── ORIENTATION ──────────────────────────────────────────────────────────
+    //
+    //  xo_shield.mdl default orientation: dome cup opens UPWARD (Y-up in model space).
+    //  We want it to open FORWARD (toward the enemy).
+    //
+    //  Rotating -90° in pitch tilts the top of the dome away from the player
+    //  and the open face toward the player's forward direction:
+    //
+    //       Pitch  0  →  dome opens up   (normal Titan use)
+    //       Pitch -90 →  dome opens forward  (what we want)
+    //
+    //  The positioning thread then overwrites angles every frame, applying
+    //  < -90, eyeAngles.y, 0 > so the dome always faces horizontally forward.
+    //
+    wall.SetAngles( < -90, player.EyeAngles().y, 0 > )
+
+    DispatchSpawn( wall )
+
+    // Hide the stock model — the dome FX is the only visual.
+    // wall.Hide()
+
+    // ── Damage settings ───────────────────────────────────────────────────────
     wall.SetTakeDamageType( DAMAGE_YES )
     wall.SetDamageNotifications( true )
-    wall.SetMaxHealth( 9999 )
-    wall.SetHealth( 9999 )
+    wall.SetMaxHealth( GetConVarFloat("a_brawl_shield_health") )
+    wall.SetHealth( GetConVarFloat("a_brawl_shield_health") )
 
+    // Amped-wall pass-through: amps friendly bullets crossing the shield face.
     wall.SetPassThroughFlags( PTF_ADDS_MODS | PTF_NO_DMG_ON_PASS_THROUGH )
     wall.SetPassThroughThickness( 0 )
-    wall.SetPassThroughDirection( -0.55 )
-
-    StatusEffect_AddTimed( wall, eStatusEffect.pass_through_amps_weapon, 1.0, duration, 0.0 )
-
+    wall.SetPassThroughDirection( -0.55 )   // same as original DeployAmpedWall
     wall.SetBlocksRadiusDamage( true )
+    wall.kv.contents = ( int( wall.kv.contents ) | CONTENTS_NOGRAPPLE )  // match bubble shield
+
+    if ( duration > 0.0 )
+        StatusEffect_AddTimed( wall, eStatusEffect.pass_through_amps_weapon, 1.0, duration, 0.0 )
+    else
+        StatusEffect_AddTimed( wall, eStatusEffect.pass_through_amps_weapon, 1.0, 1, 0.0 )  // 1 second base, in case duration is bad
+
     SetTeam( wall, TEAM_BOTH )
+
+    // Script-side HP pool.
+    wall.s.health <- health
 
     AddEntityCallback_OnDamaged( wall, OnAmpedWallDamaged )
 
-    wall.s.health <- health
-
+    // ── Register in lookup tables ─────────────────────────────────────────────
     file.playerShieldTable[ player ] <- wall
-    player.s.heldWall <- wall
 
-    // Positioning thread
-    thread HeldShield_PositionThread( wall, player, fwdOffset, upOffset )
+    // ── Spawn bubble-shield FX  (matching _bubble_shield.gnut pattern) ───────  //
+    //
+    //
+    //  We use StartParticleEffectInWorld_ReturnEntity (same as the original) so
+    //  we get back an entity handle we can parent + later destroy.
+    //
+    //  The FX origin is set 25 units above the wall origin to match the offset
+    //  used in CreateBubbleShieldWithSettings.  After spawning, we parent each FX
+    //  to the wall so it follows the positioning thread automatically.
+    //
+    array<entity> fxList = []
 
-    // FX
-    PlayFXOnEntity( DEPLOYABLE_SHIELD_FX_AMPED, wall )
-    EmitSoundOnEntity( wall, "Hardcover_Shield_Start_3P" )
-
-    // Lifetime thread
-    thread function() : (wall, player, duration)
+    vector fxOrigin = wall.GetOrigin() + Vector( 0, 0, 25 )
+    if ( file.bubbleFXIndex != 0 )
     {
-        wall.EndSignal("OnDestroy")
-        player.EndSignal("OnDestroy")
+        entity domeFX = StartParticleEffectInWorld_ReturnEntity( file.bubbleFXIndex, fxOrigin, <0,0,0> )
 
-        OnThreadEnd(
-            function() : (wall, player)
-            {
-                if ( IsValid( wall ) )
-                    wall.Destroy()
+        // CP1 = color
+        EffectSetControlPointVector( domeFX, 1, AWALL_ORANGE )
 
-                if ( IsValid( player ) && "heldWall" in player.s )
-                    player.s.heldWall = null
-                    
-                if ( player in file.playerShieldTable )
-                    delete file.playerShieldTable[player]
-            }
-        )
-        if ( duration > 0.0 )
-            wait duration
-        else
-            wait -1
-    }()
+        // CP2 = scale
+        EffectSetControlPointVector( domeFX, 2, < domeScale, domeScale, domeScale > )
+
+        domeFX.DisableHibernation()
+        domeFX.SetParent( wall )
+
+        fxList.append( domeFX )
+
+        file.wallFXTable[ wall ] <- fxList
+
+        // ── Sound ─────────────────────────────────────────────────────────────────
+        EmitSoundOnEntity( wall, SHIELD_START_SFX )
+
+        // Wait until the player is fully alive and initialized
+        while ( !IsValid( player ) || !IsAlive( player ) )
+            WaitFrame()
+
+
+        // ── Threads ───────────────────────────────────────────────────────────────
+        thread HeldShield_PositionThread( wall, player, fwdOffset, upOffset )
+        thread HeldShield_LifetimeThread( wall, player, duration )
+    }
+    else
+    {
+        print( "[A-Brawl] WARNING: bubbleFXIndex is 0, not spawning FX" )
+    }
 }
 
+
 // ================================================================================================
-//  POSITION THREAD — keeps the shield pinned in front of the player every frame
+//  POSITION THREAD
+//
+//  Locks the wall entity in front of the player every frame.
+//  The dome FX is attached with FX_PATTACH_ABSORIGIN_FOLLOW, so it
+//  rides along automatically without any extra code here.
+//
+//  Orientation notes:
+//    • Pitch is zeroed — the dome stands upright in world space even when
+//      the player aims up/down.  This gives consistent hemispherical coverage
+//      without exposing the legs when aiming high.
+//    • Yaw-only rotation means the flat face of the dome always faces the
+//      direction the player is horizontally looking.
+//    • Forward offset uses the full eye-angles forward vector so the shield
+//      doesn't drift into walls when looking at steep angles.
+//    • Change shieldAngles to < eyeAngles.x, eyeAngles.y, 0 > if you ever
+//      want the dome to tilt with the player's pitch.
 // ================================================================================================
 void function HeldShield_PositionThread( entity wall, entity player, float fwdOffset, float upOffset )
 {
-    wall.EndSignal("OnDestroy")
-    player.EndSignal("OnDestroy")
+    wall.EndSignal( "OnDestroy" )
+    player.EndSignal( "OnDestroy" )
 
-    while ( true )
+    while ( IsValid( wall ) && IsValid( player ) && IsAlive( player ) )
     {
         vector eyeAngles = player.EyeAngles()
+
         vector forward   = AnglesToForward( eyeAngles )
-        vector right     = AnglesToRight( eyeAngles )
-        vector up        = AnglesToUp( eyeAngles )
+        vector worldUp   = < 0, 0, 1 >
 
-        vector pos = player.GetOrigin()
-                    + forward * fwdOffset
-                    + up * upOffset
-                    + right * -5  
+        vector shieldOrigin = player.GetOrigin()
+                              + forward * fwdOffset
+                              + worldUp * upOffset
 
-        vector ang = <0, eyeAngles.y + 90, 0>
+        vector shieldAngles = < eyeAngles.x - 90, eyeAngles.y, 0 >
 
-        wall.SetOrigin( pos )
-        wall.SetAngles( ang )
+        wall.SetOrigin( shieldOrigin )
+        wall.SetAngles( shieldAngles )
 
-        wait 0
+        WaitFrame()   // crashed if wait 0
     }
+}
+
+
+// ================================================================================================
+//  LIFETIME THREAD
+//
+//  OnThreadEnd is the guaranteed cleanup path regardless of how the thread exits
+//  (duration elapsed, wall destroyed externally, player died/disconnected).
+// ================================================================================================
+void function HeldShield_LifetimeThread( entity wall, entity player, float duration )
+{
+    wall.EndSignal( "OnDestroy" )
+    player.EndSignal( "OnDestroy" )
+
+    OnThreadEnd(
+        function() : ( player )
+        {
+            if ( IsValid( player ) )
+                DestroyHeldAmpedWall( player )
+        }
+    )
+
+    if ( duration > 0.0 )
+        wait duration
+    else
+        WaitForever()
 }
 
 
 // ================================================================================================
 //  DESTROY HELD AMPED WALL
+//
+//  Single authoritative cleanup.  Safe to call multiple times.
 // ================================================================================================
 void function DestroyHeldAmpedWall( entity player )
 {
     if ( !IsValid( player ) )
         return
 
-    if ( !(player in file.playerShieldTable) )
+    if ( !( player in file.playerShieldTable ) )
         return
 
     entity wall = file.playerShieldTable[ player ]
@@ -262,9 +409,22 @@ void function DestroyHeldAmpedWall( entity player )
 
     if ( IsValid( wall ) )
     {
-        // Break effect.
-        PlayFX( $"P_pilot_amped_shield_break", wall.GetOrigin(), wall.GetAngles() )
-        EmitSoundAtPosition( TEAM_BOTH, wall.GetOrigin(), "Hardcover_Shield_End_3P" )
+        // Kill both FX entities cleanly.
+        if ( wall in file.wallFXTable )
+        {
+            array<entity> fxList = file.wallFXTable[ wall ]
+            delete file.wallFXTable[ wall ]
+            foreach ( fx in fxList )
+            {
+                if ( IsValid( fx ) )
+                    EffectStop( fx )   // matches how _bubble_shield.gnut tears down FX
+            }
+        }
+
+        // Break effect and sound at the shield's last position.
+        PlayFX( SHIELD_BREAK_FX, wall.GetOrigin(), wall.GetAngles() )
+        EmitSoundAtPosition( TEAM_BOTH, wall.GetOrigin(), SHIELD_END_SFX )
+
         wall.Destroy()
     }
 }
@@ -275,11 +435,9 @@ void function DestroyHeldAmpedWall( entity player )
 // ================================================================================================
 void function OnAmpedWallDamaged( entity wall, var damageInfo )
 {
-    // Only block / absorb damage that comes from the front hemisphere.
     if ( !HeldShield_ShouldBlockDamage( wall, damageInfo ) )
         return
 
-    // Credit the attacker with a hit so killcam / hit markers work.
     entity attacker = DamageInfo_GetAttacker( damageInfo )
     if ( IsValid( attacker ) && attacker.IsPlayer() )
     {
@@ -296,26 +454,22 @@ void function OnAmpedWallDamaged( entity wall, var damageInfo )
         )
     }
 
-    // Apply the standard A-Wall damage scaling (amped walls reduce incoming damage).
+    EmitSoundOnEntity( wall, SHIELD_HIT_SFX )
+
+    // A-Wall Damage Modifier
     float damage = DamageInfo_GetDamage( damageInfo )
     ShieldDamageModifier mod = GetShieldDamageModifier( damageInfo )
     damage *= mod.damageScale
     DamageInfo_SetDamage( damageInfo, damage )
 
-    // Drain our script-side health pool.
     wall.s.health -= damage
 
-    // Destroy the shield when it runs out.
     if ( wall.s.health <= 0 )
     {
         entity owner = null
         foreach ( player, shield in file.playerShieldTable )
         {
-            if ( shield == wall )
-            {
-                owner = player
-                break
-            }
+            if ( shield == wall ) { owner = player; break }
         }
 
         if ( IsValid( owner ) )
@@ -325,11 +479,16 @@ void function OnAmpedWallDamaged( entity wall, var damageInfo )
     }
 }
 
-
 // ================================================================================================
 //  HEMISPHERE CHECK
-//  Returns true if the incoming damage should be blocked by the shield.
-//  The shield covers a full 180° in front of the player (dot product > 0).
+//
+//  Uses yaw-only forward to match the dome's visual orientation (which is also
+//  yaw-only in the positioning thread).  This means the shield covers the same
+//  180° arc that the dome mesh faces, making the visuals and the blocking logic
+//  consistent.
+//
+//  To tighten coverage to a 90° cone: change > 0.0 to > 0.707
+//  To keep full 180° hemisphere:      keep   > 0.0
 // ================================================================================================
 bool function HeldShield_ShouldBlockDamage( entity wall, var damageInfo )
 {
@@ -337,43 +496,31 @@ bool function HeldShield_ShouldBlockDamage( entity wall, var damageInfo )
     if ( !IsValid( attacker ) )
         return false
 
-    // Find who owns this shield.
     entity owner = null
     foreach ( player, shield in file.playerShieldTable )
     {
-        if ( shield == wall )
-        {
-            owner = player
-            break
-        }
+        if ( shield == wall ) { owner = player; break }
     }
 
     if ( !IsValid( owner ) )
         return false
 
-    // Player's current facing direction.
-    vector playerForward = AnglesToForward( owner.EyeAngles() )
+    // Yaw-only forward to match the dome's orientation.
+    vector forward    = AnglesToForward( < 0, owner.EyeAngles().y, 0 > )
+    vector incomingDir = Normalize( owner.GetOrigin() - attacker.GetOrigin() )
 
-    // Direction from the attacker toward the player (i.e. the direction the shot is travelling).
-    vector attackerToPlayer = Normalize( owner.GetOrigin() - attacker.GetOrigin() )
-
-    // If dot > 0, the shot is coming from within the forward 180° arc → shield blocks it.
-    return DotProduct( playerForward, attackerToPlayer ) > 0.0
+    return DotProduct( forward, incomingDir ) > 0.0
 }
 
 
 // ================================================================================================
-//  COMPATIBILITY STUB — called by other systems that track active amped walls
+//  COMPATIBILITY STUB
 // ================================================================================================
 int function GetAmpedWallsActiveCountForPlayer( entity player )
 {
     if ( player in file.playerShieldTable )
-    {
-        entity wall = file.playerShieldTable[ player ]
-        if ( IsValid( wall ) )
+        if ( IsValid( file.playerShieldTable[ player ] ) )
             return 1
-    }
     return 0
 }
-
 #endif

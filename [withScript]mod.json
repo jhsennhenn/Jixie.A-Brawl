@@ -30,5 +30,14 @@
             "DefaultValue": "0.35",
             "Description": "Scale passed to the bubble shield FX via CP2. The xo_shield model is Titan-scale; 0.35 brings it down to roughly pilot size. Affects the FX bubble only, not the collision geometry."
         }
+    ],
+
+    "Scripts": [
+        {
+            "RunOn": "SERVER",
+            "ServerCallback": {
+                "Init": "MpWeaponDeployableCover_Init"
+            }
+        }
     ]
 }
