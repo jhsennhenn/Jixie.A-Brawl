@@ -41,6 +41,10 @@ global function DestroyHeldAmpedWall
 global function OnAmpedWallDamaged
 global function GetAmpedWallsActiveCountForPlayer
 global function HeldShield_ShouldBlockDamage
+
+global function CreateScaledDome
+global function AttachScaledFX
+global function SpawnDomeShield
 #endif
 
 // ── Asset identifiers ─────────────────────────────────────────────────────────
@@ -102,10 +106,10 @@ void function EnsureShieldFXPrecached()
 // ================================================================================================
 function MpWeaponDeployableCover_Init()
 {
-    PrecacheModel( DOME_SHIELD_MODEL )
-    file.bubbleFXIndex = PrecacheParticleSystem( DOME_FX_NAME )
-    // print( "[A-Brawl] precached dome FX = " + string( file.precachedDomeFX ) )
-    print( "[A-Brawl] bubbleFXIndex = " + string( file.bubbleFXIndex ) )
+    // PrecacheModel( DOME_SHIELD_MODEL )
+    // file.bubbleFXIndex = PrecacheParticleSystem( DOME_FX_NAME )
+    // // print( "[A-Brawl] precached dome FX = " + string( file.precachedDomeFX ) )
+    // print( "[A-Brawl] bubbleFXIndex = " + string( file.bubbleFXIndex ) )
 }
 
 // ================================================================================================
@@ -156,7 +160,8 @@ var function OnWeaponTossReleaseAnimEvent_weapon_deployable_cover( entity weapon
     #if SERVER
     entity owner = weapon.GetWeaponOwner()
     if ( IsValid( owner ) )
-        CreateHeldAmpedWall( owner )
+        // CreateHeldAmpedWall( owner )
+        SpawnDomeShield( owner )
     #endif
 
     return 0
@@ -168,10 +173,72 @@ var function OnWeaponTossReleaseAnimEvent_weapon_deployable_cover( entity weapon
 // ================================================================================================
 #if SERVER
 
+entity function CreateScaledDome( entity owner, vector origin, float domeScale, vector domeColor )
+{
+    entity dome = CreateEntity( "prop_dynamic" )
+    dome.SetValueForModelKey( $"models/fx/xo_shield.mdl" )
+
+    // Basic KV setup
+    dome.kv.solid = SOLID_VPHYSICS
+    dome.kv.rendercolor = format( "%d %d %d", int(domeColor.x * 255), int(domeColor.y * 255), int(domeColor.z * 255) )
+    dome.kv.modelscale = domeScale.tostring()
+
+    dome.SetOrigin( origin )
+    dome.SetAngles( <0,0,0> )
+
+    DispatchSpawn( dome )
+
+    // Optional: parent to owner (or wall, or ability entity)
+    if ( owner != null )
+        dome.SetParent( owner )
+
+    return dome
+}
+
+entity function AttachScaledFX( entity ownerEnt, vector origin, float domeScale, vector fxColor )
+{
+
+    int fxIndex = PrecacheParticleSystem( DOME_FX_NAME )
+    if ( fxIndex == 0 )
+    {
+        print( "[A-Brawl] ERROR: FX not found: " + DOME_FX_NAME )
+        return null
+    }
+
+    entity fx = StartParticleEffectInWorld_ReturnEntity(
+        fxIndex,
+        origin,
+        <0,0,0>
+    )
+
+    // Color (if supported)
+    EffectSetControlPointVector( fx, 1, fxColor )
+
+    // Scale (if supported)
+    EffectSetControlPointVector( fx, 2, <domeScale, domeScale, domeScale> )
+
+    fx.DisableHibernation()
+    fx.SetParent( ownerEnt )
+
+    return fx
+}
+
+void function SpawnDomeShield( entity owner )
+{
+    float domeScale = 0.5
+    vector domeColor = <1, 0.40, 0> // orange
+
+    vector origin = owner.GetOrigin() + <0,0,25>
+
+    entity domeModel = CreateScaledDome( owner, origin, domeScale, domeColor )
+
+    // Optional FX layer
+    entity domeFX = AttachScaledFX( domeModel, origin, domeScale, domeColor )
+}
+
 void function CreateHeldAmpedWall( entity player )
 {
-    // custom fake init function because the init function was not calling for some reason
-    EnsureShieldFXPrecached()
+
 
     // if ( !file.initHasBeenCalledOnce )
     // {
@@ -287,13 +354,18 @@ void function CreateHeldAmpedWall( entity player )
     vector fxOrigin = wall.GetOrigin() + Vector( 0, 0, 25 )
     if ( file.bubbleFXIndex != 0 )
     {
-        entity domeFX = StartParticleEffectInWorld_ReturnEntity( file.bubbleFXIndex, fxOrigin, <0,0,0> )
+        // entity domeFX = StartParticleEffectInWorld_ReturnEntity(
+        entity domeFX = StartParticleEffectInWorld_ReturnEntity(
+            file.bubbleFXIndex,
+            fxOrigin,
+            <0,0,0>
+        )
 
-        // CP1 = color
-        EffectSetControlPointVector( domeFX, 1, AWALL_ORANGE )
+        // // CP1 = color
+        // EffectSetControlPointVector( domeFX, 1, AWALL_ORANGE )
 
-        // CP2 = scale
-        EffectSetControlPointVector( domeFX, 2, < domeScale, domeScale, domeScale > )
+        // // CP2 = scale
+        // EffectSetControlPointVector( domeFX, 2, < domeScale, domeScale, domeScale > )
 
         domeFX.DisableHibernation()
         domeFX.SetParent( wall )
