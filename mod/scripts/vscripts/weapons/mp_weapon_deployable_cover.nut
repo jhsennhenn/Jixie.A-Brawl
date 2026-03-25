@@ -1,33 +1,9 @@
 untyped
 
-// ================================================================================================
-//  JIXIE'S A-BRAWL MOD  —  mp_weapon_deployable_cover.nut
-//
-//  ARCHITECTURE OVERVIEW
-//  ─────────────────────
-//  The "shield" is made of two distinct layers:
-//
-//    1. COLLISION ENTITY  ("wall")
-//       An invisible prop_dynamic using the stock amped-wall model.
-//       It exists purely to receive damage callbacks and to provide a
-//       world-space anchor for the particle FX.  Rendered invisible via Hide().
-//
-//    2. VISUAL LAYER  ("domeFX")
-//       A particle effect started on the collision entity using
-//       StartParticleEffectOnEntity(..., FX_PATTACH_ABSORIGIN_FOLLOW, -1).
-//       Control Point 1 carries <scale, scale, scale> so the dome can be
-//       resized at runtime via the a_brawl_dome_scale ConVar.
-//
-//  Both layers are repositioned every frame by HeldShield_PositionThread.
-//
-//  LIFECYCLE
-//  ─────────
-//    Activate  → OnWeaponTossReleaseAnimEvent → CreateHeldAmpedWall
-//    Re-press  → OnWeaponAttemptOffhandSwitch → DestroyHeldAmpedWall → false
-//    HP = 0    → OnAmpedWallDamaged           → DestroyHeldAmpedWall
-//    Death     → lifetime thread OnThreadEnd  → DestroyHeldAmpedWall
-//    Duration  → lifetime thread wait         → DestroyHeldAmpedWall
-// ================================================================================================
+// ======================================================================================================
+//  JIXIE'S A-BRAWL MOD
+//  Changes the A-Wall ability from a deploayable cover to a personal shield that stays with the player.
+// ======================================================================================================
 
 global function MpWeaponDeployableCover_Init
 
@@ -53,8 +29,7 @@ global function AttachScaledFX
 //  The engine needs a valid model on any prop_dynamic, but we Hide() it
 //  so only the particle FX is visible.
 //
-//  DOME_FX_NAME must match the `particle "..."` name in awall_dome_fx.pdef exactly.
-//
+
 // const DEPLOYABLE_SHIELD_MODEL = $"models/fx/pilot_shield_wall_amped.mdl"
 const DOME_SHIELD_MODEL = $"models/fx/xo_shield.mdl"
 const asset DOME_FX_NAME = $"awall_dome_fx"

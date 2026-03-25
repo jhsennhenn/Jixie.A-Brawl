@@ -1,5 +1,0 @@
-$modelname "models/awall_dome/awall_dome.mdl"
-$body "Body" "awall_dome.fbx"
-$staticprop
-$surfaceprop "default"
-$cdmaterials "models/awall_dome"
