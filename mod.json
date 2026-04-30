@@ -31,11 +31,6 @@
             "Description": "Shield lifetime in seconds. 0 = infinite."
         },
         {
-            "Name": "a_brawl_shield_cooldown",
-            "DefaultValue": "10",
-            "Description": "Cooldown after shield ends."
-        },
-        {
             "Name": "a_brawl_dome_scale",
             "DefaultValue": "0.35",
             "Description": "Scale of shield model (1 = regular dome shield size)."
@@ -44,7 +39,11 @@
             "Name": "a_brawl_shield_hide",
             "DefaultValue": "1",
             "Description": "1 = hide physical shield model"
+        },
+        {
+            "Name": "a_brawl_dash_speed",
+            "DefaultValue": "600",
+            "Description": "Velocity added to player upon second button press."
         }
-
     ]
 }
