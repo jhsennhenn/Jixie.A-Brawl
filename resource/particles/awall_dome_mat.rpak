@@ -1,9 +1,0 @@
-material "particles/awall_dome_mat"
-{
-    shader "particle_default"
-
-    param $fresnel_power 4.0
-    param $fresnel_color "[0.2 0.6 1.0 1.0]"
-    param $emissive_strength 2.0
-    param $alpha 0.35
-}

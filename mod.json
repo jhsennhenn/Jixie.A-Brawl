@@ -1,29 +1,29 @@
 {
     "Name": "Jixie.A-Brawl",
-    "Description": "Replaces the A-Wall with a handheld dome shield (Titan bubble shield model, rotated forward) carried in front of the player.",
-    "Version": "0.5.0",
+    "Description": "Replaces the A-Wall with a personal dome shield that protects the front half\nof the player from damage and amps all bullets that pass through the back.",
+    "Version": "0.8.0",
     "LoadPriority": 1,
 
     "ConVars": [
         {
             "Name": "a_brawl_shield_health",
             "DefaultValue": "400",
-            "Description": "HP of the held shield before it breaks. 0 = use default (100)."
+            "Description": "HP of the held shield before it breaks. 0 = use default."
         },
         {
             "Name": "a_brawl_shield_forward_offset",
-            "DefaultValue": "175",
-            "Description": "Distance in front of the player the dome hovers (units). The xo_shield model is large so this needs to be higher than the flat-wall version."
+            "DefaultValue": "0",
+            "Description": "Distance in front of the player the sphere sits."
         },
         {
             "Name": "a_brawl_shield_vertical_offset",
             "DefaultValue": "0",
-            "Description": "Vertical offset of the dome (positive = up, negative = down)."
+            "Description": "Vertical offset."
         },
         {
             "Name": "a_brawl_shield_side_offset",
             "DefaultValue": "0",
-            "Description": "Horizontal offset of the dome."
+            "Description": "Horizontal offset."
         },
         {
             "Name": "a_brawl_shield_duration",
@@ -32,33 +32,19 @@
         },
         {
             "Name": "a_brawl_shield_cooldown",
-            "DefaultValue": "3",
-            "Description": "Shield ability cooldown"
+            "DefaultValue": "10",
+            "Description": "Cooldown after shield ends."
+        },
+        {
+            "Name": "a_brawl_dome_scale",
+            "DefaultValue": "0.35",
+            "Description": "Scale of shield model (1 = regular dome shield size)."
         },
         {
             "Name": "a_brawl_shield_hide",
             "DefaultValue": "1",
-            "Description": "1 = shield hidden, 0 = shield not hidden"
-        },
-        {
-            "Name": "a_brawl_shield_rotate_x",
-            "DefaultValue": "180",
-            "Description": "for adjusting the rotation angles of the shield"
-        },
-        {
-            "Name": "a_brawl_shield_rotate_y",
-            "DefaultValue": "0",
-            "Description": "for adjusting the rotation angles of the shield"
-        },
-        {
-            "Name": "a_brawl_shield_rotate_z",
-            "DefaultValue": "-90",
-            "Description": "for adjusting the rotation angles of the shield"
-        },
-        {
-            "Name": "a_brawl_dome_scale",
-            "DefaultValue": "0.30",
-            "Description": "Scale passed to the bubble shield FX via CP2. The xo_shield model is Titan-scale; 0.35 brings it down to roughly pilot size. Affects the FX bubble only, not the collision geometry."
+            "Description": "1 = hide physical shield model"
         }
+
     ]
 }

@@ -15,11 +15,10 @@ global function OnWeaponAttemptOffhandSwitch_weapon_deployable_cover
 global function CreateHeldAmpedWall
 global function DestroyHeldAmpedWall
 global function OnAmpedWallDamaged
-global function FlashShieldHit
 global function GetAmpedWallsActiveCountForPlayer
 global function HeldShield_ShouldBlockDamage
+
 global function CreateScaledDome
-global function AttachScaledFX
 #endif
 
 // ── Asset identifiers ─────────────────────────────────────────────────────────
@@ -40,7 +39,7 @@ const SHIELD_END_SFX   = "Hardcover_Shield_End_3P"
 const SHIELD_HIT_SFX = "Hardcover_Shield_Hit_3P"
 
 // ── Hardcoded fallbacks (ConVars override at runtime) ─────────────────────────
-const int   DEFAULT_SHIELD_HEALTH   = 100
+const int   DEFAULT_SHIELD_HEALTH   = 850
 const float DEFAULT_FORWARD_OFFSET  = 50.0
 const float DEFAULT_VERTICAL_OFFSET = 0.0
 const float DEFAULT_DOME_SCALE      = 0.35
@@ -70,7 +69,6 @@ void function EnsureShieldFXPrecached()
     PrecacheModel( DOME_SHIELD_MODEL )
 
     file.bubbleFXIndex = PrecacheParticleSystem( DOME_FX_NAME )
-    // file.bubbleFXIndex = GetParticleSystemIndex( DOME_FX_NAME )
 
     if (file.bubbleFXIndex == 0 ) {
         print( "[A-Brawl] WARNING: FX not found: " + DOME_FX_NAME )
@@ -87,10 +85,6 @@ void function EnsureShieldFXPrecached()
 // ================================================================================================
 function MpWeaponDeployableCover_Init()
 {
-    // PrecacheModel( DOME_SHIELD_MODEL )
-    // file.bubbleFXIndex = PrecacheParticleSystem( DOME_FX_NAME )
-    // // print( "[A-Brawl] precached dome FX = " + string( file.precachedDomeFX ) )
-    // print( "[A-Brawl                 ] bubbleFXIndex = " + string( file.bubbleFXIndex ) )
 }
 
 // ================================================================================================
@@ -156,7 +150,7 @@ var function OnWeaponTossReleaseAnimEvent_weapon_deployable_cover( entity weapon
 
 // Visual Dome Model Layer
 // entity function CreateScaledDome( entity owner, entity player, float domeScale, vector domeColor )
-entity function CreateScaledDome( entity wall, float domeScale, vector domeColor )
+entity function CreateScaledDome( entity owner, float domeScale, vector domeColor )
 {
     entity dome = CreateEntity( "prop_dynamic" )
     dome.SetValueForModelKey( DOME_SHIELD_MODEL )
@@ -172,75 +166,29 @@ entity function CreateScaledDome( entity wall, float domeScale, vector domeColor
         int(domeColor.z * 255)
     )
     dome.kv.modelscale = domeScale.tostring()
+
     dome.kv.renderamt = 255
     dome.kv.renderfx = 0
-    dome.kv.rendermode = 5   // additive
 
-    StartParticleEffectOnEntity( dome, GetParticleSystemIndex( $"P_bubble_shield" ), FX_PATTACH_ABSORIGIN_FOLLOW, -1 )
+    dome.SetOrigin( owner.GetOrigin() + <0,0,0> )
+    // dome.SetAngles( player.EyeAngles() + < -90, 0, 0 > )
+    dome.SetAngles( owner.GetAngles() )
 
     DispatchSpawn( dome )
 
-    dome.SetParent( wall )
-    dome.SetLocalOrigin( < 0, 0, 0 > )
-    dome.SetLocalAngles( < 0, 0, 0 > )
+    // Optional: parent to owner (or wall, or ability entity)
+    if ( owner != null )
+        dome.SetParent( owner )
 
     return dome
-}
-
-// FX Layer ** Unused because I could not get it to not crash my game
-//            (likely a problem with the precached file being invalid)
-entity function AttachScaledFX( entity wall, float domeScale, vector fxColor )
-{
-    print( "[A-Brawl] AttachScaledFX CALLED" )
-
-    if ( file.bubbleFXIndex == 0 )
-    {
-        print( "[A-Brawl] ERROR: FX not found: " + DOME_FX_NAME )
-        return null
-    }
-
-    // Delay until wall is fully spawned
-    thread function() : ( wall, domeScale, fxColor )
-    {
-        WaitFrame()
-
-        if ( !IsValid( wall ) )
-            return
-
-        entity fx = StartParticleEffectInWorld_ReturnEntity(
-            file.bubbleFXIndex,
-            wall.GetOrigin() + <0,0,0>,
-            <0,0,0>
-        )
-
-        EffectSetControlPointVector( fx, 1, fxColor )
-        EffectSetControlPointVector( fx, 2, <domeScale, domeScale, domeScale> )
-
-        fx.DisableHibernation()
-        fx.SetParent( wall )
-    }()
-
-    /*
-    if ( file.bubbleFXIndex == 0 )
-    {
-        print( "[A-Brawl] ERROR: FX not precached: " + DOME_FX_NAME )
-        return null
-    }
-
-    entity fx = StartParticleEffectOnEntity( wall, file.bubbleFXIndex, FX_PATTACH_ABSORIGIN_FOLLOW, -1 )
-    if ( IsValid( fx ) )
-    {
-        EffectSetControlPointVector( fx, 1, < domeScale, domeScale, domeScale > )
-        fx.DisableHibernation()
-    }
-    return fx
-    */
 }
 
 // Main Shield Logic
 void function CreateHeldAmpedWall( entity player )
 {
     if ( !IsValid( player ) )
+        return
+    if ( !IsAlive( player ) )
         return
 
     EnsureShieldFXPrecached()
@@ -254,24 +202,14 @@ void function CreateHeldAmpedWall( entity player )
     }
 
     // ConVar reads
-    int   health    = GetConVarInt( "a_brawl_shield_health" )
-    if ( health <= 0 ) health = DEFAULT_SHIELD_HEALTH
+    float fwdOffset = GetConVarFloat( "a_brawl_shield_forward_offset" )
+    float upOffset  = GetConVarFloat( "a_brawl_shield_vertical_offset" )
+    float duration  = GetConVarFloat( "a_brawl_shield_duration" )
+    float domeScale = GetConVarFloat( "a_brawl_dome_scale" )
+    float domeHealth = GetConVarFloat( "a_brawl_shield_health" )
+    bool domeHide = GetConVarBool( "a_brawl_shield_hide" )
 
-    float fwdOffset  = GetConVarFloat( "a_brawl_shield_forward_offset" )
-    float upOffset   = GetConVarFloat( "a_brawl_shield_vertical_offset" )
-    float sideOffset = GetConVarFloat( "a_brawl_shield_side_offset" )
-    float duration   = GetConVarFloat( "a_brawl_shield_duration" )
-    float cd         = GetConVarFloat( "a_brawl_shield_cooldown" )
-    float domeScale  = GetConVarFloat( "a_brawl_dome_scale" )
-    bool domeHide    = GetConVarBool( "a_brawl_shield_hide" )
-
-    // float endTime = Time() + cd
-
-    // player.s.nextShieldUseTime = endTime
-
-    // player.SetPlayerNetFloat( "tactical_cooldown_start", Time() )
-    // player.SetPlayerNetFloat( "tactical_cooldown_end", endTime )
-    // player.SetPlayerNetFloat( "tactical_cooldown_duration", cd )
+    if ( domeHealth <= 0 ) domeHealth = DEFAULT_SHIELD_HEALTH
 
     if ( domeScale <= 0.0 )
         domeScale = DEFAULT_DOME_SCALE
@@ -281,22 +219,22 @@ void function CreateHeldAmpedWall( entity player )
     wall.kv.modelscale = domeScale.tostring()
     wall.kv.solid          = SOLID_VPHYSICS
     wall.kv.CollisionGroup = TRACE_COLLISION_GROUP_BLOCK_WEAPONS_AND_PHYSICS
+    // wall.SetParent( player )
+    wall.SetOrigin( player.GetOrigin() )
+    wall.SetAngles( < 90, player.EyeAngles().y, 0 > )
+
     DispatchSpawn( wall )
-    wall.SetOwner( player )
+
     if ( domeHide ) wall.Hide()
 
-    wall.SetParent( player )
-    wall.SetLocalOrigin( < fwdOffset, sideOffset, upOffset > )
-    int wallX = GetConVarInt( "a_brawl_shield_rotate_x" )
-    int wallY = GetConVarInt( "a_brawl_shield_rotate_y" )
-    int wallZ = GetConVarInt( "a_brawl_shield_rotate_z" )
-    // wall.SetLocalAngles( < wallX, wallY, wallZ > )
+    // Visual dome
+    entity domeModel = CreateScaledDome( wall, domeScale, SHIELD_COLOR )
 
     // Damage settings
     wall.SetTakeDamageType( DAMAGE_YES )
     wall.SetDamageNotifications( true )
-    wall.SetMaxHealth( health )
-    wall.SetHealth( health )
+    wall.SetMaxHealth( domeHealth )
+    wall.SetHealth( domeHealth )
 
     // Amped-wall pass-through: amps friendly bullets crossing the shield face.
     wall.SetPassThroughFlags( PTF_ADDS_MODS | PTF_NO_DMG_ON_PASS_THROUGH )
@@ -311,46 +249,66 @@ void function CreateHeldAmpedWall( entity player )
         StatusEffect_AddTimed( wall, eStatusEffect.pass_through_amps_weapon, 1.0, 1, 0.0 )  // 1 second base, in case duration is bad
 
     SetTeam( wall, TEAM_BOTH )
-    wall.s.health <- health
+
+    // Script-side HP pool.
+    wall.s.domeHealth <- domeHealth
+
     AddEntityCallback_OnDamaged( wall, OnAmpedWallDamaged )
 
     // Register in lookup tables
     file.playerShieldTable[ player ] <- wall
-
-    // Visual dome + FX
-    // entity domeModel = CreateScaledDome( wall, player, domeScale, SHIELD_COLOR )
-    entity domeModel = CreateScaledDome( wall, domeScale, SHIELD_COLOR )
-    // Dont do fx because it is unnecessary and does not work because of probably the file that it is trying to use in the precache.
-    // entity domeFX = AttachScaledFX( wall, domeScale, SHIELD_COLOR )
+    file.wallFXTable[ wall ] <- []
 
     thread HeldShield_LifetimeThread( wall, player, duration )
-    thread HeldShield_DirectionThread( wall, player )
-
-    // Old positioning thread
-    // thread HeldShield_PositionThread( wall, player, fwdOffset, upOffset )
-
-    EmitSoundOnEntity( wall, SHIELD_START_SFX)
+    thread HeldShield_PositionThread( wall, player, fwdOffset, upOffset )
 }
 
-void function HeldShield_DirectionThread( entity wall, entity player)
+/*
+    The positioning thread idealy would just be wall.SetLocalAngles(<0,0,0>)
+                                            and wall.SetLocalOrigin(<0,0,0>),
+    and parented to the player in CreateHeldAmpedWall after spawning the prop,
+    but this causes the model to disappear for some reason.
+    Because of this flaw, we use this method to move the shield with the player,
+    but it is very laggy and doesnt stay with the player very well. I have been
+    trying to fix this, but so far haven't found a solution. If you have one,
+    PLEASE pull request!!
+*/
+
+
+void function HeldShield_PositionThread( entity wall, entity player, float fwdOffset, float upOffset )
 {
     wall.EndSignal( "OnDestroy" )
     player.EndSignal( "OnDestroy" )
 
-    while ( true )
+    while ( IsValid( wall ) && IsValid( player ) && IsAlive( player ) )
     {
-        vector ang = player.EyeAngles()
+        vector eyeAngles = player.EyeAngles()
 
-        wall.SetLocalAngles( < 90, 0, 0 > )
+        vector forward   = AnglesToForward( eyeAngles )
+        vector worldUp   = < 0, 0, 1 >
 
-        WaitFrame()
+        vector shieldOrigin = player.GetOrigin()
+                              + forward * fwdOffset
+                              + worldUp * upOffset
+        vector shieldAngles = player.EyeAngles() + < 90, 0, 0 >
+        wall.SetOrigin( shieldOrigin )
+        wall.SetAngles( shieldAngles )
+
+        WaitFrame()   // WILL crash if no wait here
     }
 }
 
+
+// ================================================================================================
+//  LIFETIME THREAD
+//
+//  OnThreadEnd is the guaranteed cleanup path regardless of how the thread exits
+//  (duration elapsed, wall destroyed externally, player died/disconnected).
+// ================================================================================================
 void function HeldShield_LifetimeThread( entity wall, entity player, float duration )
 {
     // Safety: if either entity is invalid, bail immediately
-    if ( ( !IsValid( wall ) || !IsValid( player ) || !IsAlive( player ) ) )
+    if ( !IsValid( wall ) || !IsValid( player ) )
         return
 
     wall.EndSignal( "OnDestroy" )
@@ -359,9 +317,6 @@ void function HeldShield_LifetimeThread( entity wall, entity player, float durat
     OnThreadEnd(
         function() : ( wall, player )
         {
-            if ( IsValid( wall ) )
-                wall.Destroy()
-
             if ( IsValid( player ) )
                 DestroyHeldAmpedWall( player )
         }
@@ -369,9 +324,10 @@ void function HeldShield_LifetimeThread( entity wall, entity player, float durat
 
     // Duration safety
     if ( duration <= 0.0 )
-        duration = 9999.0
+        duration = 99999.0   // never truly infinite
 
     wait duration
+
 }
 
 
@@ -409,6 +365,7 @@ void function DestroyHeldAmpedWall( entity player )
         PlayFX( SHIELD_BREAK_FX, wall.GetOrigin(), wall.GetAngles() )
         EmitSoundAtPosition( TEAM_BOTH, wall.GetOrigin(), SHIELD_END_SFX )
 
+        print( "[A-Brawl] Shield Destroyed!" )
         wall.Destroy()
     }
 }
@@ -446,9 +403,10 @@ void function OnAmpedWallDamaged( entity wall, var damageInfo )
     damage *= mod.damageScale
     DamageInfo_SetDamage( damageInfo, damage )
 
-    wall.s.health -= damage
+    print( "[A-Brawl] Shield Damaged for " + damage + "." )
+    wall.s.domeHealth -= damage
 
-    if ( wall.s.health <= 0 )
+    if ( wall.s.domeHealth <= 0 )
     {
         entity owner = null
         foreach ( player, shield in file.playerShieldTable )
@@ -458,54 +416,9 @@ void function OnAmpedWallDamaged( entity wall, var damageInfo )
 
         if ( IsValid( owner ) )
             DestroyHeldAmpedWall( owner )
-        else if ( IsValid( wall ) )
-            wall.Destroy()
     }
-
-    // if ( "domeModel" in wall.s )
-    // {
-    //     var dome = null
-    //     if ( "domeModel" in wall.s )
-    //         dome = wall.s.domeModel
-    //         if ( IsValid( dome ) )
-    //             thread FlashShieldHit( dome )
-    // }
 }
 
-void function FlashShieldHit( var dome )
-{
-    if ( !IsValid( dome ) )
-        return
-
-    // Boost brightness (renderamt 255 = fully bright)
-    dome.kv.renderamt = 255
-    dome.kv.rendercolor = "255 200 100"   // bright orange flash
-
-    // Hold for a few frames
-    WaitFrame()
-    WaitFrame()
-
-    // Restore original color
-    vector c = SHIELD_COLOR
-    dome.kv.rendercolor = format( "%d %d %d",
-        int(c.x * 255),
-        int(c.y * 255),
-        int(c.z * 255)
-    )
-    dome.kv.renderamt = 255
-}
-
-// ================================================================================================
-//  HEMISPHERE CHECK
-//
-//  Uses yaw-only forward to match the dome's visual orientation (which is also
-//  yaw-only in the positioning thread).  This means the shield covers the same
-//  180° arc that the dome mesh faces, making the visuals and the blocking logic
-//  consistent.
-//
-//  To tighten coverage to a 90° cone: change > 0.0 to > 0.707
-//  To keep full 180° hemisphere:      keep   > 0.0
-// ================================================================================================
 bool function HeldShield_ShouldBlockDamage( entity wall, var damageInfo )
 {
     entity attacker = DamageInfo_GetAttacker( damageInfo )
