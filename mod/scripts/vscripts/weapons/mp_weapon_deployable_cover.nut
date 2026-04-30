@@ -365,7 +365,7 @@ void function DestroyHeldAmpedWall( entity player )
         PlayFX( SHIELD_BREAK_FX, wall.GetOrigin(), wall.GetAngles() )
         EmitSoundAtPosition( TEAM_BOTH, wall.GetOrigin(), SHIELD_END_SFX )
 
-        print( "[A-Brawl] Shield Destroyed!" )
+        // print( "[A-Brawl] Shield Destroyed!" )
         wall.Destroy()
     }
 }
@@ -403,7 +403,7 @@ void function OnAmpedWallDamaged( entity wall, var damageInfo )
     damage *= mod.damageScale
     DamageInfo_SetDamage( damageInfo, damage )
 
-    print( "[A-Brawl] Shield Damaged for " + damage + "." )
+    // print( "[A-Brawl] Shield Damaged for " + damage + "." )
     wall.s.domeHealth -= damage
 
     if ( wall.s.domeHealth <= 0 )
